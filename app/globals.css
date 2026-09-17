@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
 
 :root {
   --bg: #050407;
@@ -125,11 +124,65 @@ body {
 }
 .animate-pulse-ring { animation: pulse-ring 2.2s ease-out infinite; }
 
+/* Continuous shine sweep across gold buttons/text */
+@keyframes shine-sweep {
+  0% { background-position: -150% 0; }
+  100% { background-position: 250% 0; }
+}
+.btn-shine {
+  background-image: linear-gradient(
+    110deg,
+    var(--gold-300) 0%,
+    var(--gold-500) 40%,
+    #fff8e0 50%,
+    var(--gold-500) 60%,
+    var(--gold-700) 100%
+  );
+  background-size: 250% 100%;
+  animation: shine-sweep 4.5s linear infinite;
+}
+
+/* Slowly drifting animated mesh background, always on, low-cost */
+@keyframes mesh-drift {
+  0% { background-position: 0% 0%, 100% 100%, 50% 50%; }
+  50% { background-position: 20% 30%, 80% 60%, 40% 70%; }
+  100% { background-position: 0% 0%, 100% 100%, 50% 50%; }
+}
+.animate-mesh {
+  animation: mesh-drift 24s ease-in-out infinite;
+}
+
+/* Twinkling particle dots */
+@keyframes twinkle {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.55; }
+}
+.particle {
+  animation: twinkle 3.4s ease-in-out infinite;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin-slow { animation: spin-slow 18s linear infinite; }
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-14px) rotate(3deg); }
+}
+.animate-bob { animation: bob 5s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .animate-float-slow,
   .animate-float-slower,
   .animate-marquee,
-  .animate-pulse-ring {
+  .animate-pulse-ring,
+  .btn-shine,
+  .animate-mesh,
+  .particle,
+  .animate-spin-slow,
+  .animate-bob {
     animation: none;
   }
   html {
