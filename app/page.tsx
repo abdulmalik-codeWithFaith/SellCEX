@@ -350,8 +350,8 @@ export default function Home() {
           </div>
 
           <nav className="hidden items-center gap-8 text-sm text-[var(--text-400)] md:flex">
-            <a href="#swap" className="transition-colors hover:text-[var(--text-100)]">Swap</a>
-            <a href="#liquidity" className="transition-colors hover:text-[var(--text-100)]">Liquidity</a>
+            <a href="/swap" className="transition-colors hover:text-[var(--text-100)]">Swap</a>
+            <a href="/liquidity" className="transition-colors hover:text-[var(--text-100)]">Liquidity</a>
             <a href="#how-it-works" className="transition-colors hover:text-[var(--text-100)]">How it works</a>
             <a href="#security" className="transition-colors hover:text-[var(--text-100)]">Security</a>
             <a href="#roadmap" className="transition-colors hover:text-[var(--text-100)]">Roadmap</a>
@@ -383,8 +383,8 @@ export default function Home() {
             >
               <div className="flex flex-col gap-1 p-3 text-sm text-[var(--text-400)]">
                 {[
-                  ["Swap", "#swap"],
-                  ["Liquidity", "#liquidity"],
+                  ["Swap", "/swap"],
+                  ["Liquidity", "/liquidity"],
                   ["How it works", "#how-it-works"],
                   ["Security", "#security"],
                   ["Roadmap", "#roadmap"],
@@ -1055,9 +1055,9 @@ export default function Home() {
                 Product
               </div>
               <div className="mt-3 flex flex-col gap-2.5 text-sm text-[var(--text-400)]">
-                <a href="#swap" className="hover:text-[var(--text-100)]">Swap</a>
-                <a href="#liquidity" className="hover:text-[var(--text-100)]">Liquidity</a>
-                <a href="#dashboard" className="hover:text-[var(--text-100)]">Dashboard</a>
+                <a href="/swap" className="hover:text-[var(--text-100)]">Swap</a>
+                <a href="/liquidity" className="hover:text-[var(--text-100)]">Liquidity</a>
+                <a href="/dashboard" className="hover:text-[var(--text-100)]">Dashboard</a>
               </div>
             </div>
 
