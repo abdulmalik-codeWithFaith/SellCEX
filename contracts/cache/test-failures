@@ -1,0 +1,1 @@
+{"version":1,"failures":[{"contract":"test/SellCexPair.t.sol:SellCexPairTest","test":"test_RevertWhen_MintWithZeroLiquidity"}]}

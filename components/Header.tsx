@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
@@ -23,6 +24,7 @@ function MenuIcon({ open }: { open: boolean }) {
   return (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
       <motion.path
+        d="M4 6h16"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -36,6 +38,7 @@ function MenuIcon({ open }: { open: boolean }) {
         animate={{ opacity: open ? 0 : 1 }}
       />
       <motion.path
+        d="M4 18h16"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -113,12 +116,47 @@ export default function Header({
               BSC Testnet
             </span>
           )}
+          <div className="hidden sm:block">
+  <ConnectButton.Custom>
+    {({ account, chain, openConnectModal, openAccountModal, openChainModal, mounted }) => {
+      const ready = mounted;
+      const connected = ready && account && chain;
+
+      if (!ready) return null;
+
+      if (!connected) {
+        return (
           <button
-            onClick={onCtaClick}
-            className="btn-shine hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#050407] transition-transform hover:scale-[1.03] active:scale-[0.98] sm:inline-block"
+            onClick={openConnectModal}
+            className="btn-shine rounded-xl px-4 py-2 text-sm font-semibold text-[#050407] transition-transform hover:scale-[1.03] active:scale-[0.98]"
           >
-            {ctaLabel}
+            Connect Wallet
           </button>
+        );
+      }
+
+      if (chain.unsupported) {
+        return (
+          <button
+            onClick={openChainModal}
+            className="rounded-xl border border-[#F1665A]/40 bg-[#F1665A]/10 px-4 py-2 text-sm font-semibold text-[#F1958A]"
+          >
+            Wrong network
+          </button>
+        );
+      }
+
+      return (
+        <button
+          onClick={openAccountModal}
+          className="rounded-xl border border-[var(--border-hair)] px-4 py-2 text-sm font-medium text-[var(--text-100)] transition-colors hover:bg-[var(--bg-surface-2)]"
+        >
+          {account.displayName}
+        </button>
+      );
+    }}
+  </ConnectButton.Custom>
+</div>
           <button
             onClick={() => setMenuOpen((v) => !v)}
             className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-hair)] text-[var(--text-100)] md:hidden"

@@ -229,7 +229,7 @@ function MenuIcon({ open }: { open: boolean }) {
         animate={open ? { d: "M6 6l12 12" } : { d: "M4 6h16" }}
       />
       <motion.path
-        d="M4 12h16"
+        d="M4 6h16"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"

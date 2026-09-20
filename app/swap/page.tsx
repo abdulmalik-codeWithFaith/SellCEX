@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAccount } from "wagmi";
+import { useSwapExactTokens } from "@/lib/hooks/useSwapExactTokens";
 import { motion, AnimatePresence } from "framer-motion";
 import Header from "@/components/Header";
+import { CONTRACTS } from "@/lib/contracts";
+import { useTokenBalance } from "@/lib/hooks/useTokenBalance";
+import { useSwapQuote } from "@/lib/hooks/useSwapQuote";
+import { useCheckAllowance } from "@/lib/hooks/useCheckAllowance";
+import { useApproveToken } from "@/lib/hooks/useApproveToken";
 
 /* ------------------------------------------------------------------ */
 /*  Mock data — swap this for real wagmi/viem reads once contracts    */
@@ -475,6 +482,13 @@ export default function SwapPage() {
   const [recent, setRecent] = useState<RecentTx[]>([]);
   const settingsRef = useRef<HTMLDivElement>(null);
 
+  const { address } = useAccount();
+  const sellTokenAddress = sell.symbol === "USDT" ? CONTRACTS.anvil.usdt : CONTRACTS.anvil.sell;
+  const buyTokenAddress = buy.symbol === "USDT" ? CONTRACTS.anvil.usdt : CONTRACTS.anvil.sell;
+
+  const sellBalance = useTokenBalance(sellTokenAddress as `0x${string}`, address);
+  const buyBalance = useTokenBalance(buyTokenAddress as `0x${string}`, address);
+
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
@@ -487,25 +501,75 @@ export default function SwapPage() {
 
   const amountNum = parseFloat(sellAmount) || 0;
 
-  // Mock AMM-style quote: a touch of price impact that grows with size,
-  // so the UI has something real to show. Swap for the Router's
-  // getAmountsOut() once contracts are live.
+  const isRealPair =
+    (sell.symbol === "USDT" || sell.symbol === "SELL") &&
+    (buy.symbol === "USDT" || buy.symbol === "SELL");
+
+  const realQuote = useSwapQuote(
+    isRealPair ? (CONTRACTS.anvil.router as `0x${string}`) : undefined,
+    isRealPair ? [sellTokenAddress as `0x${string}`, buyTokenAddress as `0x${string}`] : undefined,
+    amountNum
+  );
+
+  const { allowance, refetch: refetchAllowance } = useCheckAllowance(
+    isRealPair ? (sellTokenAddress as `0x${string}`) : undefined,
+    address,
+    isRealPair ? (CONTRACTS.anvil.router as `0x${string}`) : undefined
+  );
+
+  const approveToken = useApproveToken();
+  const swapExecutor = useSwapExactTokens();
+  useEffect(() => {
+  if (swapExecutor.isSuccess) {
+    setTxHash(swapExecutor.hash ?? "");
+    setRecent((prev) => [
+      {
+        sell: sell.symbol,
+        buy: buy.symbol,
+        sellAmt: formatNumber(amountNum, 4),
+        buyAmt: formatNumber(buyAmount, 4),
+        hash: swapExecutor.hash ?? "",
+        time: "just now",
+      },
+      ...prev,
+    ].slice(0, 5));
+    setTxStage("success");
+    sellBalance.refetch();
+    buyBalance.refetch();
+    refetchAllowance();
+  }
+}, [swapExecutor.isSuccess]);
+
+  useEffect(() => {
+    if (approveToken.isSuccess) {
+      refetchAllowance();
+      setTxStage(null);
+    }
+  }, [approveToken.isSuccess]);
+
+  // Real quote from the Router when both sides have deployed contracts;
+  // falls back to illustrative mock math for tokens without one yet
+  // (BNB, ETH, WBTC, USDC, CAKE — no test-token contracts deployed).
   const { buyAmount, rate, priceImpact, minReceived } = useMemo(() => {
+    if (isRealPair) {
+      const min = realQuote.buyAmount * (1 - slippage / 100);
+      const impactPct = amountNum > 0 ? Math.max(0, (1 - realQuote.rate / (realQuote.rate || 1)) * 100) : 0;
+      return { buyAmount: realQuote.buyAmount, rate: realQuote.rate, priceImpact: impactPct, minReceived: min };
+    }
+
     const raw = (amountNum * sell.price) / buy.price;
     const notional = amountNum * sell.price;
     const impactPct = Math.min(0.05 + (notional / 20000) * 1.2, 9);
     const out = raw * (1 - impactPct / 100);
     const min = out * (1 - slippage / 100);
-    return {
-      buyAmount: out,
-      rate: sell.price / buy.price,
-      priceImpact: impactPct,
-      minReceived: min,
-    };
-  }, [amountNum, sell, buy, slippage]);
+    return { buyAmount: out, rate: sell.price / buy.price, priceImpact: impactPct, minReceived: min };
+  }, [amountNum, sell, buy, slippage, isRealPair, realQuote.buyAmount, realQuote.rate]);
 
-  const needsApproval = amountNum > 0 && !approved.has(sell.symbol);
-  const insufficientBalance = amountNum > sell.balance;
+  const amountInWei = amountNum > 0 ? BigInt(Math.floor(amountNum * 1e18)) : BigInt(0);
+  const needsApproval = isRealPair
+    ? amountNum > 0 && allowance < amountInWei
+    : amountNum > 0 && !approved.has(sell.symbol);
+  const insufficientBalance = amountNum > sellBalance.balance;
 
   function pickToken(side: "sell" | "buy", token: Token) {
     if (side === "sell") {
@@ -525,18 +589,38 @@ export default function SwapPage() {
   }
 
   function startApprove() {
-    setTxStage("approving");
-    setTimeout(() => {
-      setApproved((prev) => new Set(prev).add(sell.symbol));
-      setTxStage(null);
-    }, 1600);
+    if (isRealPair) {
+      setTxStage("approving");
+      approveToken.approve(sellTokenAddress as `0x${string}`, CONTRACTS.anvil.router as `0x${string}`);
+    } else {
+      setTxStage("approving");
+      setTimeout(() => {
+        setApproved((prev) => new Set(prev).add(sell.symbol));
+        setTxStage(null);
+      }, 1600);
+    }
   }
 
   function openReview() {
     setTxStage("review");
   }
 
-  function confirmSwap() {
+  // NOTE: still simulated — Stage 3 (real swap execution via
+  // swapExactTokensForTokens) hasn't been wired in yet. Approve is real;
+  // this confirm step is the next thing to replace.
+ function confirmSwap() {
+  if (isRealPair) {
+    setTxStage("pending");
+    swapExecutor.swap(
+      CONTRACTS.anvil.router as `0x${string}`,
+      amountNum,
+      minReceived,
+      [sellTokenAddress as `0x${string}`, buyTokenAddress as `0x${string}`],
+      address as `0x${string}`,
+      deadline
+    );
+  } else {
+    // Fallback simulated flow for placeholder tokens without real contracts
     setTxStage("pending");
     setTimeout(() => {
       const hash = shortHash();
@@ -555,6 +639,7 @@ export default function SwapPage() {
       setTxStage("success");
     }, 1800);
   }
+}
 
   function closeTxModal() {
     if (txStage === "success") setSellAmount("");
@@ -579,7 +664,7 @@ export default function SwapPage() {
       </div>
 
       {/* header */}
-      <Header/>
+      <Header />
 
       {/* swap card */}
       <section className="mx-auto flex max-w-md flex-col items-center px-5 pt-36">
@@ -621,10 +706,10 @@ export default function SwapPage() {
             <div className="mb-2 flex justify-between text-xs text-[var(--text-600)]">
               <span>You pay</span>
               <button
-                onClick={() => setSellAmount(String(sell.balance))}
+                onClick={() => setSellAmount(String(sellBalance.balance))}
                 className="hover:text-[var(--gold-500)]"
               >
-                Balance: {formatNumber(sell.balance, 4)}
+                Balance: {formatNumber(sellBalance.balance, 4)}
                 <span className="ml-1 text-[var(--gold-500)]">MAX</span>
               </button>
             </div>
@@ -668,7 +753,7 @@ export default function SwapPage() {
           <div className="rounded-2xl border border-[var(--border-hair)] bg-[var(--bg-surface-2)] p-4">
             <div className="mb-2 flex justify-between text-xs text-[var(--text-600)]">
               <span>You receive</span>
-              <span>Balance: {formatNumber(buy.balance, 4)}</span>
+              <span>Balance: {formatNumber(buyBalance.balance, 4)}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="font-display text-3xl text-[var(--text-100)]">

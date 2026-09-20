@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Bricolage_Grotesque } from "next/font/google";
+import Web3Provider from "@/components/Web3Provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -43,7 +44,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${bricolage.variable}`}>
-      <body>{children}</body>
+      <body><Web3Provider>{children}</Web3Provider></body>
     </html>
   );
 }
