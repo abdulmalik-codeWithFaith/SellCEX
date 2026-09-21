@@ -359,9 +359,9 @@ export default function Home() {
           </nav>
 
           <div className="flex items-center gap-2">
-            <button className="btn-shine hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#050407] transition-transform hover:scale-[1.03] active:scale-[0.98] sm:inline-block">
-              Connect Wallet
-            </button>
+            <a href="/wallet" className="btn-shine hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#050407] transition-transform hover:scale-[1.03] active:scale-[0.98] sm:inline-block">
+              Sign In
+            </a>
             <button
               onClick={() => setMenuOpen((v) => !v)}
               className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-hair)] text-[var(--text-100)] md:hidden"
@@ -399,9 +399,9 @@ export default function Home() {
                     {label}
                   </a>
                 ))}
-                <button className="btn-shine mt-1 rounded-xl px-4 py-2.5 text-sm font-semibold text-[#050407]">
-                  Connect Wallet
-                </button>
+                <a href="/wallet" className="btn-shine mt-1 rounded-xl px-4 py-2.5 text-sm font-semibold text-[#050407]">
+                  Sign In
+                </a>
               </div>
             </motion.div>
           )}

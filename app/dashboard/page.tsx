@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useInView, animate } from "framer-motion";
+import { useAccount } from "wagmi";
+import { CONTRACTS } from "@/lib/contracts";
+import { usePoolInfo } from "@/lib/hooks/usePoolInfo";
+import { useLiveSwaps } from "@/lib/hooks/useLiveSwaps";
 import Header from "@/components/Header";
 
 /* ------------------------------------------------------------------ */
@@ -320,7 +324,18 @@ function RecentSwaps() {
 /* ------------------------------------------------------------------ */
 
 export default function DashboardPage() {
-  const totalTvl = POOLS.reduce((s, p) => s + p.tvl, 0);
+  const { address } = useAccount();
+  const realPool = usePoolInfo(
+    CONTRACTS.anvil.factory as `0x${string}`,
+    CONTRACTS.anvil.sell as `0x${string}`,
+    CONTRACTS.anvil.usdt as `0x${string}`,
+    address
+  );
+  const liveSwaps = useLiveSwaps(realPool.pairAddress, "SELL", "USDT");
+
+  const realTvl = realPool.reserveA * 0.0842 + realPool.reserveB * 1;
+  const mockPoolsExcludingReal = POOLS.filter((p) => p.id !== "sell-usdt");
+  const totalTvl = mockPoolsExcludingReal.reduce((s, p) => s + p.tvl, 0) + realTvl;
   const totalVolume = POOLS.reduce((s, p) => s + p.volume24h, 0);
 
   return (
@@ -338,7 +353,7 @@ export default function DashboardPage() {
       </div>
 
       {/* header */}
-      <Header/>
+      <Header />
 
       <section className="mx-auto max-w-6xl px-5 pt-36">
         <a href="/" className="mb-3 flex items-center gap-1.5 text-sm text-[var(--text-400)] hover:text-[var(--text-100)]">
@@ -482,6 +497,34 @@ export default function DashboardPage() {
         >
           <RecentSwaps />
         </motion.div>
+
+        {/* live on-chain swaps — real, not mock */}
+        {liveSwaps.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: "-80px" }}
+            transition={{ duration: 0.7, ease: easeOut }}
+            className="mt-6 overflow-hidden rounded-2xl border border-[var(--border-hair)] bg-[var(--bg-surface)]/40"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border-hair)] px-5 py-3.5">
+              <span className="text-sm font-medium text-[var(--text-100)]">Live on-chain swaps (SELL/USDT)</span>
+              <span className="flex items-center gap-1.5 text-xs text-[#5FD98A]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#5FD98A]" />
+                Real
+              </span>
+            </div>
+            {liveSwaps.map((s) => (
+              <div key={s.id} className="flex items-center justify-between border-t border-[var(--border-hair)] px-5 py-3">
+                <div className="text-sm text-[var(--text-100)]">
+                  {parseFloat(s.amountIn).toFixed(4)} {s.tokenIn} <span className="text-[var(--text-600)]">→</span>{" "}
+                  {parseFloat(s.amountOut).toFixed(4)} {s.tokenOut}
+                </div>
+                <div className="text-xs text-[var(--text-600)]">{s.sender}</div>
+              </div>
+            ))}
+          </motion.div>
+        )}
       </section>
     </main>
   );

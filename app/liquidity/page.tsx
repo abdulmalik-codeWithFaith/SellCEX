@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useAccount } from "wagmi";
 import { motion, AnimatePresence } from "framer-motion";
 import Header from "@/components/Header";
+import { CONTRACTS } from "@/lib/contracts";
+import { usePoolInfo } from "@/lib/hooks/usePoolInfo";
+import { useCheckAllowance } from "@/lib/hooks/useCheckAllowance";
+import { useApproveToken } from "@/lib/hooks/useApproveToken";
+import { useAddLiquidity } from "@/lib/hooks/useAddLiquidity";
+import { useRemoveLiquidity } from "@/lib/hooks/useRemoveLiquidity";
 
 /* ------------------------------------------------------------------ */
-/*  Mock data — swap for real pool reads (Factory.allPairs +          */
-/*  Pair.getReserves) once contracts are deployed.                    */
+/*  Mock data — every pool except SELL/USDT stays cosmetic until more  */
+/*  test tokens are deployed. SELL/USDT is overridden with live reads  */
+/*  once the component mounts (see mergedPools below).                */
 /* ------------------------------------------------------------------ */
 
 type Token = { symbol: string; name: string; price: number; color: string };
@@ -31,18 +39,20 @@ type Pool = {
   apr: number;
   userLpTokens: number;
   totalLpTokens: number;
+  isReal?: boolean;
+  pairAddress?: `0x${string}`;
 };
 
 const rawPools: Omit<Pool, "totalLpTokens">[] = [
   { id: "bnb-usdt", a: T.BNB, b: T.USDT, reserveA: 4200, reserveB: 2475564, volume24h: 812400, apr: 18.4, userLpTokens: 410 },
-  { id: "sell-usdt", a: T.SELL, b: T.USDT, reserveA: 9000000, reserveB: 757800, volume24h: 94200, apr: 41.2, userLpTokens: 31300 },
+  { id: "sell-usdt", a: T.SELL, b: T.USDT, reserveA: 9000000, reserveB: 757800, volume24h: 94200, apr: 41.2, userLpTokens: 31300, isReal: true },
   { id: "eth-usdt", a: T.ETH, b: T.USDT, reserveA: 310, reserveB: 962271, volume24h: 540300, apr: 12.1, userLpTokens: 0 },
   { id: "wbtc-usdt", a: T.WBTC, b: T.USDT, reserveA: 14, reserveB: 866888, volume24h: 301800, apr: 9.6, userLpTokens: 0 },
   { id: "usdc-usdt", a: T.USDC, b: T.USDT, reserveA: 500000, reserveB: 500050, volume24h: 615000, apr: 4.3, userLpTokens: 0 },
   { id: "cake-bnb", a: T.CAKE, b: T.BNB, reserveA: 180000, reserveB: 706, volume24h: 76100, apr: 27.8, userLpTokens: 0 },
 ];
 
-const POOLS: Pool[] = rawPools.map((p) => ({
+const BASE_POOLS: Pool[] = rawPools.map((p) => ({
   ...p,
   totalLpTokens: Math.sqrt(p.reserveA * p.reserveB),
 }));
@@ -60,14 +70,6 @@ function fmtUsd(n: number) {
 }
 function tvl(p: Pool) {
   return p.reserveA * p.a.price + p.reserveB * p.b.price;
-}
-function shortHash() {
-  const chars = "abcdef0123456789";
-  let h = "0x";
-  for (let i = 0; i < 8; i++) h += chars[Math.floor(Math.random() * chars.length)];
-  h += "…";
-  for (let i = 0; i < 4; i++) h += chars[Math.floor(Math.random() * chars.length)];
-  return h;
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,6 +149,12 @@ function PairIcons({ a, b }: { a: Token; b: Token }) {
   );
 }
 
+function tokenAddress(symbol: string): `0x${string}` {
+  return symbol === "USDT"
+    ? (CONTRACTS.anvil.usdt as `0x${string}`)
+    : (CONTRACTS.anvil.sell as `0x${string}`);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Add liquidity modal                                                */
 /* ------------------------------------------------------------------ */
@@ -155,57 +163,95 @@ type FlowStage = "form" | "approving-a" | "approving-b" | "pending" | "success";
 
 function AddLiquidityModal({
   pool,
+  address,
   onClose,
   onDone,
 }: {
   pool: Pool;
+  address: `0x${string}` | undefined;
   onClose: () => void;
   onDone: (amtA: number, amtB: number) => void;
 }) {
   const [amountA, setAmountA] = useState("");
   const [stage, setStage] = useState<FlowStage>("form");
-  const [approvedA, setApprovedA] = useState(false);
-  const [approvedB, setApprovedB] = useState(false);
+  const [slippage] = useState(0.5);
   const [txHash, setTxHash] = useState("");
 
-  const ratio = pool.reserveB / pool.reserveA;
+  const tokenAAddr = tokenAddress(pool.a.symbol);
+  const tokenBAddr = tokenAddress(pool.b.symbol);
+  const routerAddr = CONTRACTS.anvil.router as `0x${string}`;
+
+  const allowanceA = useCheckAllowance(pool.isReal ? tokenAAddr : undefined, address, pool.isReal ? routerAddr : undefined);
+  const allowanceB = useCheckAllowance(pool.isReal ? tokenBAddr : undefined, address, pool.isReal ? routerAddr : undefined);
+  const approveA = useApproveToken();
+  const approveB = useApproveToken();
+  const addLiquidityTx = useAddLiquidity();
+
+  const ratio = pool.reserveA > 0 ? pool.reserveB / pool.reserveA : 0;
   const amtA = parseFloat(amountA) || 0;
   const amtB = amtA * ratio;
   const shareOfPool = pool.totalLpTokens > 0 ? (amtA / (pool.reserveA + amtA)) * 100 : 100;
 
-  function runApprovals() {
-    if (!approvedA) {
+  const amtAWei = amtA > 0 ? BigInt(Math.floor(amtA * 1e18)) : BigInt(0);
+  const amtBWei = amtB > 0 ? BigInt(Math.floor(amtB * 1e18)) : BigInt(0);
+
+  useEffect(() => {
+    if (!pool.isReal) return;
+    if (stage === "approving-a" && approveA.isSuccess) {
+      allowanceA.refetch();
+      if (allowanceB.allowance < amtBWei) {
+        setStage("approving-b");
+        approveB.approve(tokenBAddr, routerAddr);
+      } else {
+        submit();
+      }
+    }
+  }, [approveA.isSuccess]);
+
+  useEffect(() => {
+    if (!pool.isReal) return;
+    if (stage === "approving-b" && approveB.isSuccess) {
+      allowanceB.refetch();
+      submit();
+    }
+  }, [approveB.isSuccess]);
+
+  useEffect(() => {
+    if (!pool.isReal) return;
+    if (stage === "pending" && addLiquidityTx.isSuccess) {
+      setTxHash(addLiquidityTx.hash ?? "");
+      setStage("success");
+      onDone(amtA, amtB);
+    }
+  }, [addLiquidityTx.isSuccess]);
+
+  function submit() {
+    setStage("pending");
+    addLiquidityTx.addLiquidity(routerAddr, tokenAAddr, tokenBAddr, amtA, amtB, slippage, address as `0x${string}`, 20);
+  }
+
+  function runReal() {
+    if (allowanceA.allowance < amtAWei) {
       setStage("approving-a");
-      setTimeout(() => {
-        setApprovedA(true);
-        if (!approvedB) {
-          setStage("approving-b");
-          setTimeout(() => {
-            setApprovedB(true);
-            supply();
-          }, 1300);
-        } else {
-          supply();
-        }
-      }, 1300);
-    } else if (!approvedB) {
+      approveA.approve(tokenAAddr, routerAddr);
+    } else if (allowanceB.allowance < amtBWei) {
       setStage("approving-b");
-      setTimeout(() => {
-        setApprovedB(true);
-        supply();
-      }, 1300);
+      approveB.approve(tokenBAddr, routerAddr);
     } else {
-      supply();
+      submit();
     }
   }
 
-  function supply() {
-    setStage("pending");
+  function runMock() {
+    setStage("approving-a");
     setTimeout(() => {
-      setTxHash(shortHash());
-      setStage("success");
-      onDone(amtA, amtB);
-    }, 1600);
+      setStage("pending");
+      setTimeout(() => {
+        setTxHash("0xmock…demo");
+        setStage("success");
+        onDone(amtA, amtB);
+      }, 1600);
+    }, 1300);
   }
 
   return (
@@ -240,6 +286,11 @@ function AddLiquidityModal({
               <span className="text-sm font-medium text-[var(--text-100)]">
                 {pool.a.symbol} / {pool.b.symbol}
               </span>
+              {pool.isReal && (
+                <span className="ml-auto rounded-full bg-[#5FD98A]/15 px-2 py-0.5 text-xs text-[#5FD98A]">
+                  Live on-chain
+                </span>
+              )}
             </div>
 
             <div className="mt-3 rounded-2xl border border-[var(--border-hair)] bg-[var(--bg-surface-2)] p-4">
@@ -300,7 +351,7 @@ function AddLiquidityModal({
               whileHover={amtA > 0 ? { scale: 1.01 } : {}}
               whileTap={amtA > 0 ? { scale: 0.98 } : {}}
               disabled={amtA <= 0}
-              onClick={runApprovals}
+              onClick={pool.isReal ? runReal : runMock}
               className={`btn-shine mt-5 w-full rounded-xl py-3.5 text-sm font-semibold text-[#050407] ${
                 amtA <= 0 ? "cursor-not-allowed opacity-40" : ""
               }`}
@@ -321,7 +372,9 @@ function AddLiquidityModal({
                 : "Supplying liquidity"}
             </h3>
             <p className="mt-2 max-w-[240px] text-sm text-[var(--text-400)]">
-              Waiting for the transaction to be mined.
+              {pool.isReal
+                ? "Confirm in your wallet, then wait for the transaction to be mined."
+                : "Waiting for the transaction to be mined."}
             </p>
           </div>
         )}
@@ -343,7 +396,7 @@ function AddLiquidityModal({
               Supplied {fmt(amtA, 4)} {pool.a.symbol} and {fmt(amtB, 4)} {pool.b.symbol}
             </p>
             <div className="mt-4 flex items-center gap-2 rounded-lg border border-[var(--border-hair)] bg-[var(--bg-surface-2)] px-3 py-2 text-xs text-[var(--text-400)]">
-              <span>{txHash}</span>
+              <span>{txHash.length > 20 ? `${txHash.slice(0, 10)}…${txHash.slice(-6)}` : txHash}</span>
               <span className="text-[var(--gold-500)]">View on BscScan ↗</span>
             </div>
             <button
@@ -365,25 +418,78 @@ function AddLiquidityModal({
 
 function RemoveLiquidityModal({
   pool,
+  address,
   onClose,
   onDone,
 }: {
   pool: Pool;
+  address: `0x${string}` | undefined;
   onClose: () => void;
   onDone: (pct: number) => void;
 }) {
   const [pct, setPct] = useState(50);
-  const [stage, setStage] = useState<"form" | "pending" | "success">("form");
+  const [stage, setStage] = useState<"form" | "approving" | "pending" | "success">("form");
   const [txHash, setTxHash] = useState("");
 
-  const userShare = pool.userLpTokens / pool.totalLpTokens;
+  const routerAddr = CONTRACTS.anvil.router as `0x${string}`;
+  const tokenAAddr = tokenAddress(pool.a.symbol);
+  const tokenBAddr = tokenAddress(pool.b.symbol);
+
+  const lpAllowance = useCheckAllowance(pool.isReal ? pool.pairAddress : undefined, address, pool.isReal ? routerAddr : undefined);
+  const approveLp = useApproveToken();
+  const removeLiquidityTx = useRemoveLiquidity();
+
+  const userShare = pool.totalLpTokens > 0 ? pool.userLpTokens / pool.totalLpTokens : 0;
   const outA = pool.reserveA * userShare * (pct / 100);
   const outB = pool.reserveB * userShare * (pct / 100);
+  const liquidityToRemove = pool.userLpTokens * (pct / 100);
+  const liquidityWei = BigInt(Math.floor(liquidityToRemove * 1e18));
 
-  function remove() {
+  useEffect(() => {
+    if (!pool.isReal) return;
+    if (stage === "approving" && approveLp.isSuccess) {
+      lpAllowance.refetch();
+      submit();
+    }
+  }, [approveLp.isSuccess]);
+
+  useEffect(() => {
+    if (!pool.isReal) return;
+    if (stage === "pending" && removeLiquidityTx.isSuccess) {
+      setTxHash(removeLiquidityTx.hash ?? "");
+      setStage("success");
+      onDone(pct);
+    }
+  }, [removeLiquidityTx.isSuccess]);
+
+  function submit() {
+    setStage("pending");
+    removeLiquidityTx.removeLiquidity(
+      routerAddr,
+      tokenAAddr,
+      tokenBAddr,
+      liquidityToRemove,
+      outA * 0.99, // small slippage buffer
+      outB * 0.99,
+      address as `0x${string}`,
+      20
+    );
+  }
+
+  function runReal() {
+    if (!pool.pairAddress) return;
+    if (lpAllowance.allowance < liquidityWei) {
+      setStage("approving");
+      approveLp.approve(pool.pairAddress, routerAddr);
+    } else {
+      submit();
+    }
+  }
+
+  function runMock() {
     setStage("pending");
     setTimeout(() => {
-      setTxHash(shortHash());
+      setTxHash("0xmock…demo");
       setStage("success");
       onDone(pct);
     }, 1600);
@@ -470,7 +576,7 @@ function RemoveLiquidityModal({
             <motion.button
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.98 }}
-              onClick={remove}
+              onClick={pool.isReal ? runReal : runMock}
               className="mt-5 w-full rounded-xl border border-[#F1665A]/40 bg-[#F1665A]/10 py-3.5 text-sm font-semibold text-[#F1958A]"
             >
               Remove liquidity
@@ -478,14 +584,16 @@ function RemoveLiquidityModal({
           </>
         )}
 
-        {stage === "pending" && (
+        {(stage === "approving" || stage === "pending") && (
           <div className="flex flex-col items-center py-6 text-center">
             <Spinner size={44} />
             <h3 className="mt-5 font-display text-lg font-semibold text-[var(--text-100)]">
-              Removing liquidity
+              {stage === "approving" ? "Approving LP tokens" : "Removing liquidity"}
             </h3>
             <p className="mt-2 max-w-[240px] text-sm text-[var(--text-400)]">
-              Waiting for the transaction to be mined.
+              {pool.isReal
+                ? "Confirm in your wallet, then wait for the transaction to be mined."
+                : "Waiting for the transaction to be mined."}
             </p>
           </div>
         )}
@@ -507,7 +615,7 @@ function RemoveLiquidityModal({
               Received {fmt(outA, 4)} {pool.a.symbol} and {fmt(outB, 4)} {pool.b.symbol}
             </p>
             <div className="mt-4 flex items-center gap-2 rounded-lg border border-[var(--border-hair)] bg-[var(--bg-surface-2)] px-3 py-2 text-xs text-[var(--text-400)]">
-              <span>{txHash}</span>
+              <span>{txHash.slice(0, 10)}…{txHash.slice(-6)}</span>
               <span className="text-[var(--gold-500)]">View on BscScan ↗</span>
             </div>
             <button
@@ -528,52 +636,66 @@ function RemoveLiquidityModal({
 /* ------------------------------------------------------------------ */
 
 export default function LiquidityPage() {
+  const { address } = useAccount();
   const [tab, setTab] = useState<"all" | "yours">("all");
-  const [pools, setPools] = useState(POOLS);
+  const [mockOverrides, setMockOverrides] = useState<Record<string, Pool>>({});
   const [addTarget, setAddTarget] = useState<Pool | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Pool | null>(null);
 
+  // Live on-chain data for the one real pool
+  const realPoolInfo = usePoolInfo(
+    CONTRACTS.anvil.factory as `0x${string}`,
+    CONTRACTS.anvil.sell as `0x${string}`,
+    CONTRACTS.anvil.usdt as `0x${string}`,
+    address
+  );
+
+  // Merge: real pool gets live data, everything else uses mock data
+  // (optionally locally adjusted after a simulated add/remove for the
+  // cosmetic pools, via mockOverrides).
+  const pools: Pool[] = BASE_POOLS.map((p) => {
+    if (p.isReal) {
+      return {
+        ...p,
+        reserveA: realPoolInfo.reserveA || p.reserveA,
+        reserveB: realPoolInfo.reserveB || p.reserveB,
+        totalLpTokens: realPoolInfo.totalSupply || p.totalLpTokens,
+        userLpTokens: realPoolInfo.userLp,
+        pairAddress: realPoolInfo.pairAddress,
+      };
+    }
+    return mockOverrides[p.id] ?? p;
+  });
+
   const yourPools = pools.filter((p) => p.userLpTokens > 0);
   const totalUserValue = yourPools.reduce((sum, p) => {
-    const share = p.userLpTokens / p.totalLpTokens;
+    const share = p.totalLpTokens > 0 ? p.userLpTokens / p.totalLpTokens : 0;
     return sum + share * tvl(p);
   }, 0);
 
-  function handleAddDone(poolId: string, amtA: number, amtB: number) {
-    setPools((prev) =>
-      prev.map((p) => {
-        if (p.id !== poolId) return p;
-        const newReserveA = p.reserveA + amtA;
-        const newReserveB = p.reserveB + amtB;
-        const mintedLp = p.totalLpTokens * (amtA / p.reserveA);
-        return {
-          ...p,
-          reserveA: newReserveA,
-          reserveB: newReserveB,
-          totalLpTokens: p.totalLpTokens + mintedLp,
-          userLpTokens: p.userLpTokens + mintedLp,
-        };
-      })
-    );
+  function handleAddDone(poolId: string) {
+    const pool = pools.find((p) => p.id === poolId);
+    if (pool?.isReal) {
+      realPoolInfo.refetchAll();
+      return;
+    }
+    // Cosmetic pools: locally nudge the mock numbers so the UI feels alive
+    setMockOverrides((prev) => {
+      const base = prev[poolId] ?? BASE_POOLS.find((p) => p.id === poolId)!;
+      return { ...prev, [poolId]: { ...base, userLpTokens: base.userLpTokens + 100 } };
+    });
   }
 
-  function handleRemoveDone(poolId: string, pct: number) {
-    setPools((prev) =>
-      prev.map((p) => {
-        if (p.id !== poolId) return p;
-        const share = p.userLpTokens / p.totalLpTokens;
-        const removedLp = p.userLpTokens * (pct / 100);
-        const removedA = p.reserveA * share * (pct / 100);
-        const removedB = p.reserveB * share * (pct / 100);
-        return {
-          ...p,
-          reserveA: p.reserveA - removedA,
-          reserveB: p.reserveB - removedB,
-          totalLpTokens: p.totalLpTokens - removedLp,
-          userLpTokens: p.userLpTokens - removedLp,
-        };
-      })
-    );
+  function handleRemoveDone(poolId: string) {
+    const pool = pools.find((p) => p.id === poolId);
+    if (pool?.isReal) {
+      realPoolInfo.refetchAll();
+      return;
+    }
+    setMockOverrides((prev) => {
+      const base = prev[poolId] ?? BASE_POOLS.find((p) => p.id === poolId)!;
+      return { ...prev, [poolId]: { ...base, userLpTokens: 0 } };
+    });
   }
 
   return (
@@ -590,8 +712,7 @@ export default function LiquidityPage() {
         <div className="grid-overlay absolute inset-0" />
       </div>
 
-      {/* header */}
-      <Header/>
+      <Header />
 
       <section className="mx-auto max-w-5xl px-5 pt-36">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -608,7 +729,7 @@ export default function LiquidityPage() {
           <motion.button
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
-            onClick={() => setAddTarget(pools[0])}
+            onClick={() => setAddTarget(pools[1])}
             className="btn-shine flex items-center gap-1.5 self-start rounded-xl px-5 py-3 text-sm font-semibold text-[#050407]"
           >
             <IconPlus />
@@ -616,7 +737,6 @@ export default function LiquidityPage() {
           </motion.button>
         </div>
 
-        {/* summary strip */}
         <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
           {[
             { label: "Total value locked", value: fmtUsd(pools.reduce((s, p) => s + tvl(p), 0)) },
@@ -631,7 +751,6 @@ export default function LiquidityPage() {
           ))}
         </div>
 
-        {/* tabs */}
         <div className="mb-5 inline-flex rounded-xl border border-[var(--border-hair)] bg-[var(--bg-surface)]/60 p-1">
           {(["all", "yours"] as const).map((t) => (
             <button
@@ -648,7 +767,6 @@ export default function LiquidityPage() {
           ))}
         </div>
 
-        {/* pool list */}
         <div className="overflow-hidden rounded-2xl border border-[var(--border-hair)] bg-[var(--bg-surface)]/40">
           <div className="hidden grid-cols-[1.6fr_1fr_1fr_0.8fr_0.8fr_auto] gap-3 border-b border-[var(--border-hair)] px-5 py-3 text-xs text-[var(--text-600)] md:grid">
             <span>Pool</span>
@@ -676,6 +794,11 @@ export default function LiquidityPage() {
                     <span className="text-sm font-medium text-[var(--text-100)]">
                       {p.a.symbol} / {p.b.symbol}
                     </span>
+                    {p.isReal && (
+                      <span className="rounded-full bg-[#5FD98A]/15 px-2 py-0.5 text-[10px] text-[#5FD98A]">
+                        Live
+                      </span>
+                    )}
                   </div>
                   <div className="text-sm text-[var(--text-400)] md:text-[var(--text-100)]">
                     <span className="text-xs text-[var(--text-600)] md:hidden">TVL </span>
@@ -722,8 +845,9 @@ export default function LiquidityPage() {
         {addTarget && (
           <AddLiquidityModal
             pool={addTarget}
+            address={address}
             onClose={() => setAddTarget(null)}
-            onDone={(a, b) => handleAddDone(addTarget.id, a, b)}
+            onDone={() => handleAddDone(addTarget.id)}
           />
         )}
       </AnimatePresence>
@@ -732,8 +856,9 @@ export default function LiquidityPage() {
         {removeTarget && (
           <RemoveLiquidityModal
             pool={removeTarget}
+            address={address}
             onClose={() => setRemoveTarget(null)}
-            onDone={(pct) => handleRemoveDone(removeTarget.id, pct)}
+            onDone={() => handleRemoveDone(removeTarget.id)}
           />
         )}
       </AnimatePresence>
