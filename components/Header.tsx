@@ -10,9 +10,6 @@ const easeOut = [0.16, 1, 0.3, 1] as const;
 
 export type NavItem = { label: string; href: string };
 
-// Used on the app pages (Swap, Liquidity, Dashboard, Wallet). The landing
-// page passes its own set of in-page anchors instead — see usage notes
-// below the component.
 export const DEFAULT_NAV: NavItem[] = [
   { label: "Swap", href: "/swap" },
   { label: "Liquidity", href: "/liquidity" },
@@ -187,12 +184,45 @@ export default function Header({
                   {item.label}
                 </Link>
               ))}
-              <button
-                onClick={onCtaClick}
-                className="btn-shine mt-1 rounded-xl px-4 py-2.5 text-sm font-semibold text-[#050407]"
-              >
-                {ctaLabel}
-              </button>
+              <ConnectButton.Custom>
+    {({ account, chain, openConnectModal, openAccountModal, openChainModal, mounted }) => {
+      const ready = mounted;
+      const connected = ready && account && chain;
+
+      if (!ready) return null;
+
+      if (!connected) {
+        return (
+          <button
+            onClick={openConnectModal}
+            className="btn-shine rounded-xl px-4 py-2 text-sm font-semibold text-[#050407] transition-transform hover:scale-[1.03] active:scale-[0.98]"
+          >
+            Connect Wallet
+          </button>
+        );
+      }
+
+      if (chain.unsupported) {
+        return (
+          <button
+            onClick={openChainModal}
+            className="rounded-xl border border-[#F1665A]/40 bg-[#F1665A]/10 px-4 py-2 text-sm font-semibold text-[#F1958A]"
+          >
+            Wrong network
+          </button>
+        );
+      }
+
+      return (
+        <button
+          onClick={openAccountModal}
+          className="rounded-xl border border-[var(--border-hair)] px-4 py-2 text-sm font-medium text-[var(--text-100)] transition-colors hover:bg-[var(--bg-surface-2)]"
+        >
+          {account.displayName}
+        </button>
+      );
+    }}
+  </ConnectButton.Custom>
             </div>
           </motion.div>
         )}
